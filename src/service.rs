@@ -1,6 +1,6 @@
 use crate::config::{Config, SuspendState};
 use crate::media::{capture_playback, restart_playback};
-use crate::power::{get_idle_threshold, get_power_status, hibernate_enabled, idle_time_secs, suspend_system};
+use crate::power::{get_idle_threshold, get_power_status, has_blocking_power_requests, hibernate_enabled, idle_time_secs, suspend_system};
 use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
@@ -120,6 +120,8 @@ pub fn run_worker(
             enabled
                 && suspend_settings.state != SuspendState::Disabled
                 && idle_time_secs() > suspend_settings.after_secs as f64
+                && (!config.respect_power_requests
+                    || !has_blocking_power_requests(&config.ignored_power_requests))
         };
 
         if should_suspend {

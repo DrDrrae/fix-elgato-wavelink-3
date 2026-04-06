@@ -44,6 +44,17 @@ pub struct Config {
     pub resume_playback_delay: u32,
     #[serde(default)]
     pub suspend_button: bool,
+    /// When true, `powercfg /requests` is checked before each suspend. If any
+    /// active power requests are found that are *not* in `ignored_power_requests`,
+    /// the suspend is skipped for this cycle (the system is considered busy).
+    #[serde(default = "default_true")]
+    pub respect_power_requests: bool,
+    /// List of substrings to ignore when scanning `powercfg /requests` output.
+    /// Any request whose `[DRIVER]/[PROCESS]` line or description contains one of
+    /// these strings is treated as non-blocking. Defaults to ignoring the
+    /// "Legacy Kernel Caller" audio-stream entry produced by apps like Elgato Wave Link.
+    #[serde(default = "default_ignored_requests")]
+    pub ignored_power_requests: Vec<String>,
     #[serde(default)]
     pub restarts: HashMap<String, RestartType>,
 }
@@ -60,6 +71,9 @@ fn default_check_interval() -> f64 {
 fn default_resume_delay() -> u32 {
     1
 }
+fn default_ignored_requests() -> Vec<String> {
+    vec!["Legacy Kernel Caller".to_string()]
+}
 
 impl Default for Config {
     fn default() -> Self {
@@ -72,6 +86,8 @@ impl Default for Config {
             resume_playback: false,
             resume_playback_delay: 1,
             suspend_button: false,
+            respect_power_requests: true,
+            ignored_power_requests: default_ignored_requests(),
             restarts: HashMap::new(),
         }
     }

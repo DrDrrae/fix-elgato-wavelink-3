@@ -18,6 +18,19 @@ design, and implementation goes to BuongiornoTexas.
 
 ---
 
+## Change Log
+
+- **v0.2.0** Added power-request awareness (`respect_power_requests`,
+  `ignored_power_requests`): legitimate sleep blockers such as video playback are now
+  respected while nuisance blockers like Elgato Wave Link's `Legacy Kernel Caller`
+  audio-stream entry continue to be ignored.
+- **v0.1.0** Initial Rust port of
+  [sleeper_service v0.20.0](https://github.com/BuongiornoTexas/sleeper_service).
+  Feature-equivalent with the Python release: system/manual timers, tray interface,
+  SMTC media resume, app restart on resume, single-instance mutex.
+
+---
+
 ## Features
 
 - **System tray interface** — enable/disable the service, switch timer modes, toggle
@@ -117,6 +130,8 @@ check_interval = 60.0
 resume_playback = false
 resume_playback_delay = 1
 suspend_button = false
+respect_power_requests = true
+ignored_power_requests = ["Legacy Kernel Caller"]
 
 [restarts]
 ```
@@ -133,7 +148,71 @@ suspend_button = false
 | `resume_playback` | bool | `false` | Attempt to resume SMTC media players after wake. Togglable from the tray. |
 | `resume_playback_delay` | integer (seconds) | `1` | Time to wait after waking before issuing pause/play commands. Increase this (e.g. to `15`) for players with large buffers (Firefox/YouTube). |
 | `suspend_button` | bool | `false` | Show a "Suspend now(-ish)!" button in the tray menu. Only takes effect on restart. |
+| `respect_power_requests` | bool | `true` | When `true`, runs `powercfg /requests` before each potential suspend. If any active power request is found that is **not** in `ignored_power_requests`, the suspend is skipped for that cycle. This allows legitimate blockers (e.g. a playing video, a presentation) to prevent sleep while still ignoring nuisance blockers like Elgato Wave Link. |
+| `ignored_power_requests` | list of strings | `["Legacy Kernel Caller"]` | Substrings matched against each entry in `powercfg /requests` output. Any request whose identifier line or description contains one of these strings is ignored. The default ignores the audio-stream entry created by apps like Elgato Wave Link and Voicemeeter. |
 | `[restarts]` | table | *(empty)* | Programs to relaunch after every service-triggered resume. See below. |
+
+---
+
+## Respecting Legitimate Sleep Blockers (`respect_power_requests`)
+
+Windows exposes active sleep-blocking requests via `powercfg /requests`. This output
+has two distinct kinds of entries:
+
+- **Nuisance blockers** — persistent audio streams from apps like Elgato Wave Link that
+  register a `[DRIVER] Legacy Kernel Caller` entry even when nothing useful is happening.
+  These are what this utility was originally designed to work around.
+
+- **Legitimate blockers** — requests raised because the user is genuinely active, e.g.:
+  - A video is playing in a media player (`[PROCESS]` entry under `DISPLAY:`)
+  - A game is running full-screen
+  - A presentation is being shown
+  - A background download/task has requested the system stay awake (`EXECUTION:`)
+
+With `respect_power_requests = true` (the default), the service runs `powercfg /requests`
+before each potential suspend. If any entry is found that is **not** covered by
+`ignored_power_requests`, the suspend is skipped for that check cycle. The idle timer
+continues running normally; suspend will happen once the blocking activity ends.
+
+To see what is currently blocking sleep on your system, run in an elevated terminal:
+
+```powershell
+powercfg /requests
+```
+
+Example output with both types of blocker active:
+
+```
+DISPLAY:
+[PROCESS] \Device\HarddiskVolume3\Windows\SystemApps\Microsoft.ZuneVideo_...\Video.UI.exe
+Video playback
+
+SYSTEM:
+[DRIVER] Legacy Kernel Caller
+An audio stream is currently in use.
+```
+
+With the default config the `Legacy Kernel Caller` line is ignored (allowing the
+sleep override to proceed), while the `Video.UI.exe` display request is respected
+(preventing sleep while the video plays).
+
+### Customising the ignore list
+
+Add any substring that appears in the `[TYPE] identifier` line or the description line
+of a request you want to ignore:
+
+```toml
+ignored_power_requests = [
+    "Legacy Kernel Caller",   # Elgato Wave Link / Voicemeeter audio streams
+    "SteelSeriesEngine.exe",  # SteelSeries Sonar (if it causes spurious requests)
+]
+```
+
+To disable the feature entirely and always force sleep regardless of any power request:
+
+```toml
+respect_power_requests = false
+```
 
 ---
 
@@ -241,10 +320,13 @@ sleeper_service.exe [--config <CONFIG_PATH>]
 | SMTC media API | `winrt` Python package | `windows` crate WinRT bindings |
 | Logging | `print` / implicit | `env_logger`; set `RUST_LOG=warn` or `RUST_LOG=debug` |
 | `suspend_button` | Immediately suspends (v0.11) / end-of-interval (v0.20) | End of current check interval |
+| Power request awareness | Not present | **New:** `respect_power_requests` + `ignored_power_requests` — skips suspend when a legitimate blocker (e.g. video playback) is active, while still ignoring nuisance blockers like `Legacy Kernel Caller` |
 
-> **Config compatibility:** The TOML schema is intentionally kept identical to the
-> Python version. If you already have a `config.toml` from the Python release, simply
-> place it next to the Rust binary and it will be read without modification.
+> **Config compatibility:** The TOML schema is intentionally kept compatible with the
+> Python version. If you already have a `config.toml` from the Python release, place it
+> next to the Rust binary and it will be read without modification. The two new keys
+> (`respect_power_requests`, `ignored_power_requests`) will be added with their defaults
+> the next time settings are saved.
 
 ---
 

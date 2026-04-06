@@ -136,6 +136,61 @@ pub fn hibernate_enabled() -> bool {
     false
 }
 
+/// Run `powercfg /requests` and return `true` if any active power request is found
+/// that is NOT covered by the `ignored` substring list.
+///
+/// `powercfg /requests` output contains section headers (`DISPLAY:`, `SYSTEM:`, …)
+/// followed by either `None.` or one or more request entries. Each entry is two lines:
+///   `[PROCESS] \Device\...\app.exe`  (or `[DRIVER]` / `[SERVICE]`)
+///   `Description of the request`
+///
+/// A request is considered ignored when either of its two lines contains any string in
+/// `ignored`.  The default ignore list contains `"Legacy Kernel Caller"` so that the
+/// Elgato Wave Link / Voicemeeter audio-stream block does not prevent sleep.
+pub fn has_blocking_power_requests(ignored: &[String]) -> bool {
+    let output = match Command::new("powercfg")
+        .arg("/requests")
+        .creation_flags(0x08000000)
+        .output()
+    {
+        Ok(o) => o,
+        Err(e) => {
+            log::warn!("powercfg /requests failed: {e}");
+            return false;
+        }
+    };
+
+    let text = String::from_utf8_lossy(&output.stdout);
+    let lines: Vec<&str> = text.lines().collect();
+    let mut i = 0;
+
+    while i < lines.len() {
+        let line = lines[i].trim();
+
+        // Request entries start with `[` (e.g. `[PROCESS]`, `[DRIVER]`, `[SERVICE]`).
+        if line.starts_with('[') {
+            let description = lines.get(i + 1).map(|l| l.trim()).unwrap_or("");
+
+            let is_ignored = ignored
+                .iter()
+                .any(|pat| line.contains(pat.as_str()) || description.contains(pat.as_str()));
+
+            if is_ignored {
+                log::debug!("Ignoring power request: {line} / {description}");
+            } else {
+                log::debug!("Blocking power request detected: {line} / {description}");
+                return true;
+            }
+
+            i += 2; // skip the description line
+        } else {
+            i += 1;
+        }
+    }
+
+    false
+}
+
 pub fn suspend_system(state: &SuspendState) -> windows::core::Result<()> {
     if *state == SuspendState::Disabled {
         return Ok(());
