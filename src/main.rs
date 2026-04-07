@@ -9,6 +9,8 @@ mod service;
 use clap::Parser;
 use muda::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use service::{LabelUpdate, WorkerMsg};
+use simplelog::{CombinedLogger, Config as LogConfig, SharedLogger, WriteLogger};
+use std::fs::File;
 use std::path::PathBuf;
 use std::sync::mpsc;
 use std::time::Duration;
@@ -19,6 +21,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, PeekMessageW, TranslateMessage, MSG, PM_REMOVE,
 };
 use windows::core::w;
+
+const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Parser)]
 #[command(about = "Simple suspend service to force hibernate/sleep after a set time.")]
@@ -47,8 +51,44 @@ fn resolve_config_path(arg: Option<PathBuf>) -> PathBuf {
     exe_dir.join("config.toml")
 }
 
+fn init_logging(config: &config::Config, config_path: &PathBuf) {
+    let level = config.log_level.to_level_filter();
+    let log_cfg = LogConfig::default();
+
+    let mut loggers: Vec<Box<dyn SharedLogger>> = Vec::new();
+
+    if config.log_to_file {
+        let log_path = config_path
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .join("sleeper_service.log");
+
+        match File::create(&log_path) {
+            Ok(file) => {
+                loggers.push(WriteLogger::new(level, log_cfg, file));
+                // Bootstrap message goes straight to the file logger after init,
+                // so we store the path and log it below.
+                let _ = CombinedLogger::init(loggers);
+                log::info!("sleeper_service v{VERSION} starting");
+                log::info!("Log file: {}", log_path.display());
+                log::info!("Log level: {level}");
+                return;
+            }
+            Err(e) => {
+                // Can't open log file — fall through to env_logger so startup
+                // isn't completely silent.
+                let _ = env_logger::try_init();
+                log::warn!("Could not create log file at {}: {e}", log_path.display());
+                return;
+            }
+        }
+    }
+
+    // File logging disabled — honour RUST_LOG env var for terminal sessions.
+    let _ = env_logger::try_init();
+}
+
 fn main() {
-    env_logger::init();
     let args = Args::parse();
 
     // Single-instance guard via named mutex
@@ -68,7 +108,14 @@ fn main() {
     let config = config::Config::load(&config_path);
     let _ = config.save(&config_path);
 
+    // Initialise logging now that we have the config.
+    init_logging(&config, &config_path);
+
+    log::info!("sleeper_service v{VERSION}");
+    log::info!("Config: {}", config_path.display());
+
     // Build tray icons
+    log::debug!("Building tray icons");
     let (enabled_rgba, disabled_rgba) = icons::create_icons();
     let enabled_icon =
         Icon::from_rgba(enabled_rgba, 64, 64).expect("failed to create enabled icon");
@@ -76,6 +123,7 @@ fn main() {
         Icon::from_rgba(disabled_rgba, 64, 64).expect("failed to create disabled icon");
 
     // Build tray menu
+    log::debug!("Building tray menu");
     let menu = Menu::new();
     let enabled_item = CheckMenuItem::new("Enabled", true, config.enabled, None);
     let use_system_item = CheckMenuItem::new("Use System Timers", true, config.use_system_timer, None);
@@ -113,6 +161,8 @@ fn main() {
         .build()
         .expect("failed to create tray icon");
 
+    log::info!("Tray icon created; spawning worker thread");
+
     // Spawn worker thread
     let (worker_tx, worker_rx) = mpsc::channel::<WorkerMsg>();
     let (label_tx, label_rx) = mpsc::channel::<LabelUpdate>();
@@ -139,24 +189,32 @@ fn main() {
         // Handle menu events
         while let Ok(event) = MenuEvent::receiver().try_recv() {
             if event.id == *exit_item.id() {
+                log::info!("Exit selected from tray menu");
                 let _ = worker_tx.send(WorkerMsg::Exit);
                 should_exit = true;
             } else if event.id == *enabled_item.id()
                 || event.id == *use_system_item.id()
                 || event.id == *resume_item.id()
             {
+                let new_enabled = enabled_item.is_checked();
+                let new_system = use_system_item.is_checked();
+                let new_resume = resume_item.is_checked();
+                log::info!(
+                    "Tray state changed: enabled={new_enabled} use_system_timer={new_system} resume_playback={new_resume}"
+                );
                 let _ = worker_tx.send(WorkerMsg::StateChanged {
-                    enabled: enabled_item.is_checked(),
-                    use_system_timer: use_system_item.is_checked(),
-                    resume_playback: resume_item.is_checked(),
+                    enabled: new_enabled,
+                    use_system_timer: new_system,
+                    resume_playback: new_resume,
                 });
-                if enabled_item.is_checked() {
+                if new_enabled {
                     let _ = tray.set_icon(Some(enabled_icon.clone()));
                 } else {
                     let _ = tray.set_icon(Some(disabled_icon.clone()));
                 }
             } else if let Some(ref btn) = suspend_btn {
                 if event.id == *btn.id() {
+                    log::info!("Quick-suspend requested from tray menu");
                     let _ = worker_tx.send(WorkerMsg::QuickSuspend);
                 }
             }
@@ -174,6 +232,7 @@ fn main() {
         std::thread::sleep(Duration::from_millis(50));
     }
 
+    log::info!("Exiting sleeper_service");
     // Drop the tray explicitly before exit
     drop(tray);
 }

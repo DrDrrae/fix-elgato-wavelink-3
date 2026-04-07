@@ -17,7 +17,7 @@ pub fn capture_playback() -> Vec<PlaybackSnapshot> {
     {
         Ok(m) => m,
         Err(e) => {
-            log::warn!("Failed to get media manager: {e}");
+            log::warn!("Failed to get SMTC media manager: {e}");
             return snapshots;
         }
     };
@@ -25,7 +25,7 @@ pub fn capture_playback() -> Vec<PlaybackSnapshot> {
     let sessions = match manager.GetSessions() {
         Ok(s) => s,
         Err(e) => {
-            log::warn!("Failed to get sessions: {e}");
+            log::warn!("Failed to get SMTC sessions: {e}");
             return snapshots;
         }
     };
@@ -34,6 +34,8 @@ pub fn capture_playback() -> Vec<PlaybackSnapshot> {
         Ok(c) => c as usize,
         Err(_) => return snapshots,
     };
+
+    log::debug!("capture_playback: found {count} SMTC session(s)");
 
     for i in 0..count {
         if let Ok(session) = sessions.GetAt(i as u32) {
@@ -45,6 +47,8 @@ pub fn capture_playback() -> Vec<PlaybackSnapshot> {
                     s == GlobalSystemMediaTransportControlsSessionPlaybackStatus::Playing
                 })
                 .unwrap_or(false);
+            let app_id = session.SourceAppUserModelId().map(|s| s.to_string()).unwrap_or_else(|_| "<unknown>".to_string());
+            log::debug!("  session[{i}] app={app_id} was_playing={was_playing}");
             snapshots.push(PlaybackSnapshot { session, was_playing });
         }
     }
@@ -53,12 +57,15 @@ pub fn capture_playback() -> Vec<PlaybackSnapshot> {
 }
 
 pub fn restart_playback(snapshots: Vec<PlaybackSnapshot>, delay_secs: u32) {
+    log::debug!("restart_playback: waiting {delay_secs}s before sending media commands");
     std::thread::sleep(std::time::Duration::from_secs(delay_secs as u64));
 
-    for snapshot in snapshots {
+    for (idx, snapshot) in snapshots.iter().enumerate() {
         if !snapshot.was_playing {
+            log::debug!("  session[{idx}]: was not playing — skipping");
             continue;
         }
+        log::debug!("  session[{idx}]: sending Pause");
         if let Ok(op) = snapshot.session.TryPauseAsync() {
             let _ = op.get();
             let mut counter = 0u32;
@@ -72,14 +79,17 @@ pub fn restart_playback(snapshots: Vec<PlaybackSnapshot>, delay_secs: u32) {
                     == Some(GlobalSystemMediaTransportControlsSessionPlaybackStatus::Paused)
                     || counter >= 50
                 {
+                    log::debug!("  session[{idx}]: paused after {counter} poll(s)");
                     break;
                 }
                 std::thread::sleep(std::time::Duration::from_millis(100));
                 counter += 1;
             }
         }
+        log::debug!("  session[{idx}]: sending Play");
         if let Ok(op) = snapshot.session.TryPlayAsync() {
             let _ = op.get();
         }
     }
+    log::debug!("restart_playback: done");
 }

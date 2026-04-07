@@ -20,6 +20,9 @@ design, and implementation goes to BuongiornoTexas.
 
 ## Change Log
 
+- **v0.3.0** Added file-based debug logging (`log_to_file`, `log_level` config options).
+  Every check-cycle decision, power-request evaluation, suspend attempt, media command,
+  config change, and app restart is now recorded in `sleeper_service.log`.
 - **v0.2.0** Added power-request awareness (`respect_power_requests`,
   `ignored_power_requests`): legitimate sleep blockers such as video playback are now
   respected while nuisance blockers like Elgato Wave Link's `Legacy Kernel Caller`
@@ -130,6 +133,8 @@ check_interval = 60.0
 resume_playback = false
 resume_playback_delay = 1
 suspend_button = false
+log_to_file = false
+log_level = "debug"
 respect_power_requests = true
 ignored_power_requests = ["Legacy Kernel Caller"]
 
@@ -148,7 +153,9 @@ ignored_power_requests = ["Legacy Kernel Caller"]
 | `resume_playback` | bool | `false` | Attempt to resume SMTC media players after wake. Togglable from the tray. |
 | `resume_playback_delay` | integer (seconds) | `1` | Time to wait after waking before issuing pause/play commands. Increase this (e.g. to `15`) for players with large buffers (Firefox/YouTube). |
 | `suspend_button` | bool | `false` | Show a "Suspend now(-ish)!" button in the tray menu. Only takes effect on restart. |
-| `respect_power_requests` | bool | `true` | When `true`, runs `powercfg /requests` before each potential suspend. If any active power request is found that is **not** in `ignored_power_requests`, the suspend is skipped for that cycle. This allows legitimate blockers (e.g. a playing video, a presentation) to prevent sleep while still ignoring nuisance blockers like Elgato Wave Link. |
+| `log_to_file` | bool | `false` | Write a log file next to the exe. Overwritten on each launch. Requires restart to take effect. |
+| `log_level` | string | `"debug"` | Verbosity of the log file. One of: `"error"`, `"warn"`, `"info"`, `"debug"`, `"trace"`. |
+| `respect_power_requests` | bool | `true` |When `true`, runs `powercfg /requests` before each potential suspend. If any active power request is found that is **not** in `ignored_power_requests`, the suspend is skipped for that cycle. This allows legitimate blockers (e.g. a playing video, a presentation) to prevent sleep while still ignoring nuisance blockers like Elgato Wave Link. |
 | `ignored_power_requests` | list of strings | `["Legacy Kernel Caller"]` | Substrings matched against each entry in `powercfg /requests` output. Any request whose identifier line or description contains one of these strings is ignored. The default ignores the audio-stream entry created by apps like Elgato Wave Link and Voicemeeter. |
 | `[restarts]` | table | *(empty)* | Programs to relaunch after every service-triggered resume. See below. |
 
@@ -332,12 +339,53 @@ sleeper_service.exe [--config <CONFIG_PATH>]
 
 ## Debugging / Logging
 
-The binary is built as a Windows GUI app (no console). To see log output, launch from
-a terminal with the `RUST_LOG` environment variable set:
+The binary is a Windows GUI app with no console window. There are two ways to get
+diagnostic output.
+
+### File logging (recommended)
+
+Enable by editing `config.toml`, then restarting the service:
+
+```toml
+log_to_file = true
+log_level = "debug"   # or "trace" for maximum detail
+```
+
+The log file is written to **`sleeper_service.log`** in the same folder as the exe,
+and is **overwritten on each launch** so it stays clean.
+
+**What is recorded:**
+
+| Level | Examples |
+|-------|---------|
+| `info` | Startup banner (version, config path, log file path), tray menu events (enable/disable, exit), suspend attempts, post-resume app restarts |
+| `debug` | Every check-cycle decision (idle time, threshold, remaining time, why suspend was skipped or triggered), config load/save/clamp, powercfg parsed values, SMTC session list, media pause/play commands, power status (AC/battery), hibernate availability |
+| `trace` | Raw `powercfg /requests` and `powercfg /query` output, raw `powercfg /a` output, individual idle-time API calls |
+
+**Example log output (debug level):**
+```
+[2024-04-06 00:30:00] INFO  sleeper_service v0.3.0
+[2024-04-06 00:30:00] INFO  Config: C:\Tools\sleeper_service\config.toml
+[2024-04-06 00:30:00] INFO  Log file: C:\Tools\sleeper_service\sleeper_service.log
+[2024-04-06 00:30:00] DEBUG Config loaded from C:\Tools\sleeper_service\config.toml
+[2024-04-06 00:30:00] DEBUG   enabled=true use_system_timer=true ...
+[2024-04-06 00:30:00] INFO  Worker started: enabled=true suspend_state=sleep suspend_after=600s check_interval=60s
+[2024-04-06 00:31:00] DEBUG Check: not yet idle — 42.3s / 600s threshold (557.7s remaining)
+[2024-04-06 00:40:00] DEBUG Power status: AcMode (ACLineStatus=1)
+[2024-04-06 00:40:00] DEBUG get_idle_threshold(STANDBYIDLE) result: 600s
+[2024-04-06 00:40:01] DEBUG Ignoring power request: [DRIVER] Legacy Kernel Caller / An audio stream is currently in use.
+[2024-04-06 00:40:01] INFO  Check: idle threshold met (612.4s >= 600s) — suspending as Sleep
+[2024-04-06 00:40:01] INFO  suspend_system: requesting sleep (hibernate=false)
+[2024-04-06 00:40:01] INFO  Resumed from suspend
+```
+
+### Terminal / RUST_LOG (one-off sessions)
+
+If `log_to_file = false`, the app falls back to `env_logger`, which reads the
+`RUST_LOG` environment variable. This is only useful when launching from a terminal:
 
 ```powershell
-$env:RUST_LOG = "warn"   # warnings and errors only (default-ish)
-$env:RUST_LOG = "debug"  # verbose — shows suspend decisions, powercfg output, etc.
+$env:RUST_LOG = "debug"
 .\sleeper_service.exe
 ```
 

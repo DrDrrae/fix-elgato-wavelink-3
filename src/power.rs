@@ -29,8 +29,11 @@ pub fn idle_time_secs() -> f64 {
         if GetLastInputInfo(&mut info).as_bool() {
             let tick = GetTickCount();
             let idle_ms = tick.wrapping_sub(info.dwTime);
-            idle_ms as f64 / 1000.0
+            let secs = idle_ms as f64 / 1000.0;
+            log::trace!("idle_time_secs: {secs:.2}s (tick={tick} last_input={})", info.dwTime);
+            secs
         } else {
+            log::warn!("GetLastInputInfo failed; assuming idle=0");
             0.0
         }
     }
@@ -40,12 +43,15 @@ pub fn get_power_status() -> PowerStatus {
     unsafe {
         let mut status = SYSTEM_POWER_STATUS::default();
         if GetSystemPowerStatus(&mut status).is_ok() {
-            match status.ACLineStatus {
+            let ps = match status.ACLineStatus {
                 0 => PowerStatus::Battery,
                 1 => PowerStatus::AcMode,
                 _ => PowerStatus::Unknown,
-            }
+            };
+            log::debug!("Power status: {ps:?} (ACLineStatus={})", status.ACLineStatus);
+            ps
         } else {
+            log::warn!("GetSystemPowerStatus failed; assuming Unknown");
             PowerStatus::Unknown
         }
     }
@@ -73,6 +79,7 @@ pub fn get_idle_threshold(power_state: &PowerStatus, idle_type: &SuspendState) -
     };
 
     let text = String::from_utf8_lossy(&output.stdout);
+    log::trace!("powercfg /query output for {alias}:\n{text}");
     let mut ac_value: Option<u32> = None;
     let mut dc_value: Option<u32> = None;
 
@@ -94,8 +101,9 @@ pub fn get_idle_threshold(power_state: &PowerStatus, idle_type: &SuspendState) -
 
     let ac = ac_value.unwrap_or(0);
     let dc = dc_value.unwrap_or(0);
+    log::debug!("get_idle_threshold({alias}): AC={ac}s DC={dc}s power_state={power_state:?}");
 
-    match power_state {
+    let result = match power_state {
         PowerStatus::AcMode => ac,
         PowerStatus::Battery => dc,
         PowerStatus::Unknown => {
@@ -106,7 +114,9 @@ pub fn get_idle_threshold(power_state: &PowerStatus, idle_type: &SuspendState) -
                 min_val
             }
         }
-    }
+    };
+    log::debug!("get_idle_threshold({alias}) result: {result}s");
+    result
 }
 
 pub fn hibernate_enabled() -> bool {
@@ -123,6 +133,7 @@ pub fn hibernate_enabled() -> bool {
     };
 
     let text = String::from_utf8_lossy(&output.stdout);
+    log::trace!("powercfg /a output:\n{text}");
     let mut in_unavailable = false;
     for line in text.lines() {
         let clean = line.trim();
@@ -130,9 +141,11 @@ pub fn hibernate_enabled() -> bool {
             in_unavailable = true;
         }
         if !in_unavailable && clean == "Hibernate" {
+            log::debug!("hibernate_enabled: true");
             return true;
         }
     }
+    log::debug!("hibernate_enabled: false");
     false
 }
 
@@ -161,6 +174,7 @@ pub fn has_blocking_power_requests(ignored: &[String]) -> bool {
     };
 
     let text = String::from_utf8_lossy(&output.stdout);
+    log::trace!("powercfg /requests output:\n{text}");
     let lines: Vec<&str> = text.lines().collect();
     let mut i = 0;
 
@@ -196,13 +210,16 @@ pub fn suspend_system(state: &SuspendState) -> windows::core::Result<()> {
         return Ok(());
     }
     let hibernate = *state == SuspendState::Hibernate;
+    log::info!("suspend_system: requesting {} (hibernate={hibernate})", state);
 
     unsafe {
         let process = GetCurrentProcess();
         let mut token = HANDLE::default();
+        log::debug!("suspend_system: opening process token");
         OpenProcessToken(process, TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &mut token)?;
 
         let mut luid = LUID::default();
+        log::debug!("suspend_system: looking up SeShutdownPrivilege");
         LookupPrivilegeValueW(PCWSTR::null(), w!("SeShutdownPrivilege"), &mut luid)?;
 
         let tp = TOKEN_PRIVILEGES {
@@ -226,6 +243,7 @@ pub fn suspend_system(state: &SuspendState) -> windows::core::Result<()> {
         );
 
         SetSuspendState(hibernate, true, false);
+        log::debug!("suspend_system: SetSuspendState called — system will suspend momentarily");
 
         let _ = AdjustTokenPrivileges(
             token,
