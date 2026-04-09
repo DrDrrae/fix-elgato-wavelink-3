@@ -3,8 +3,9 @@ use std::os::windows::process::CommandExt;
 use std::process::Command;
 use windows::Win32::Foundation::{CloseHandle, HANDLE, LUID};
 use windows::Win32::Security::{
-    AdjustTokenPrivileges, LookupPrivilegeValueW, LUID_AND_ATTRIBUTES,
-    SE_PRIVILEGE_ENABLED, TOKEN_ADJUST_PRIVILEGES, TOKEN_PRIVILEGES, TOKEN_QUERY,
+    AdjustTokenPrivileges, GetTokenInformation, LookupPrivilegeValueW, LUID_AND_ATTRIBUTES,
+    SE_PRIVILEGE_ENABLED, TOKEN_ADJUST_PRIVILEGES, TOKEN_ELEVATION, TOKEN_PRIVILEGES, TOKEN_QUERY,
+    TokenElevation,
 };
 use windows::Win32::System::Power::{GetSystemPowerStatus, SetSuspendState, SYSTEM_POWER_STATUS};
 use windows::Win32::System::SystemInformation::GetTickCount;
@@ -203,6 +204,29 @@ pub fn has_blocking_power_requests(ignored: &[String]) -> bool {
     }
 
     false
+}
+
+/// Returns `true` if the current process is running with administrator (elevated) privileges.
+pub fn is_elevated() -> bool {
+    unsafe {
+        let process = GetCurrentProcess();
+        let mut token = HANDLE::default();
+        if OpenProcessToken(process, TOKEN_QUERY, &mut token).is_err() {
+            return false;
+        }
+        let mut elevation = TOKEN_ELEVATION { TokenIsElevated: 0 };
+        let mut return_length = 0u32;
+        let ok = GetTokenInformation(
+            token,
+            TokenElevation,
+            Some(std::ptr::addr_of_mut!(elevation).cast()),
+            std::mem::size_of::<TOKEN_ELEVATION>() as u32,
+            &mut return_length,
+        )
+        .is_ok();
+        let _ = CloseHandle(token);
+        ok && elevation.TokenIsElevated != 0
+    }
 }
 
 pub fn suspend_system(state: &SuspendState) -> windows::core::Result<()> {

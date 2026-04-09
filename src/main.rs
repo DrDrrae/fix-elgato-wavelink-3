@@ -18,7 +18,8 @@ use tray_icon::{Icon, TrayIconBuilder, TrayIconEvent};
 use windows::Win32::Foundation::{ERROR_ALREADY_EXISTS, HWND};
 use windows::Win32::System::Threading::CreateMutexW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    DispatchMessageW, PeekMessageW, TranslateMessage, MSG, PM_REMOVE,
+    DispatchMessageW, MB_ICONERROR, MB_OK, MB_SYSTEMMODAL, MessageBoxW, PeekMessageW,
+    TranslateMessage, MSG, PM_REMOVE,
 };
 use windows::core::w;
 
@@ -113,6 +114,28 @@ fn main() {
 
     log::info!("sleeper_service v{VERSION}");
     log::info!("Config: {}", config_path.display());
+
+    // Require admin elevation when respect_power_requests is enabled, because
+    // `powercfg /requests` needs elevated privileges and cannot be bypassed in code.
+    if config.respect_power_requests && !power::is_elevated() {
+        log::error!(
+            "respect_power_requests = true but process is not elevated; exiting with user prompt"
+        );
+        unsafe {
+            MessageBoxW(
+                HWND::default(),
+                w!("The 'respect_power_requests' setting is enabled, but \
+powercfg /requests requires administrator privileges to run.\r\n\r\n\
+To resolve this, choose one of:\r\n\
+  \u{2022}  Run sleeper_service.exe as Administrator\r\n\
+  \u{2022}  Set respect_power_requests = false in config.toml to disable this check\r\n\r\n\
+The application will now exit."),
+                w!("sleeper_service \u{2014} Administrator required"),
+                MB_OK | MB_ICONERROR | MB_SYSTEMMODAL,
+            );
+        }
+        std::process::exit(1);
+    }
 
     // Build tray icons
     log::debug!("Building tray icons");

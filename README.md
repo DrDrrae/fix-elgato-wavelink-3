@@ -20,6 +20,9 @@ design, and implementation goes to BuongiornoTexas.
 
 ## Change Log
 
+- **v0.3.1** Admin elevation guard: if `respect_power_requests = true` and the process
+  is not running as administrator, the app now shows an error dialog explaining the
+  requirement and exits cleanly instead of silently failing.
 - **v0.3.0** Added file-based debug logging (`log_to_file`, `log_level` config options).
   Every check-cycle decision, power-request evaluation, suspend attempt, media command,
   config change, and app restart is now recorded in `sleeper_service.log`.
@@ -180,6 +183,59 @@ With `respect_power_requests = true` (the default), the service runs `powercfg /
 before each potential suspend. If any entry is found that is **not** covered by
 `ignored_power_requests`, the suspend is skipped for that check cycle. The idle timer
 continues running normally; suspend will happen once the blocking activity ends.
+
+### Administrator privileges required
+
+`powercfg /requests` is a kernel-level query and **always requires administrator
+privileges**. There is no code-level bypass. If `sleeper_service` is not running as
+administrator, the check cannot function and the application will display an error and
+exit rather than run silently with a broken feature.
+
+**Option 1 — Run as Administrator (one-off):**
+
+Right-click `sleeper_service.exe` → **Run as administrator**.
+
+**Option 2 — Auto-start elevated at login via Task Scheduler (recommended):**
+
+This is the best approach for daily use. It launches the service with full administrator
+rights automatically at every login, without a UAC prompt appearing each time.
+
+1. Open **Task Scheduler** (Win+R → `taskschd.msc`).
+2. Click **Create Task…** (not "Create Basic Task").
+3. **General** tab:
+   - Name: `sleeper_service`
+   - Select **Run whether user is logged on or not** — *or* **Run only when user is logged on** (both work; the latter shows the tray icon normally).
+   - Check **Run with highest privileges**.
+4. **Triggers** tab → **New…** → Begin the task: **At log on** → OK.
+5. **Actions** tab → **New…** → Action: **Start a program** →
+   Browse to your `sleeper_service.exe` → OK.
+6. **Conditions** tab — uncheck "Start the task only if the computer is on AC power"
+   if you want it to run on battery too.
+7. Click **OK** and enter your Windows password when prompted.
+
+The task now starts `sleeper_service.exe` elevated at every login. To disable it
+temporarily, right-click the task in Task Scheduler and choose **Disable**.
+
+Alternatively, using an elevated PowerShell prompt:
+
+```powershell
+$action  = New-ScheduledTaskAction -Execute "C:\Tools\sleeper_service\sleeper_service.exe"
+$trigger = New-ScheduledTaskTrigger -AtLogOn
+$principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -RunLevel Highest
+Register-ScheduledTask -TaskName "sleeper_service" -Action $action -Trigger $trigger -Principal $principal
+```
+
+**Option 3 — Disable the feature:**
+
+If you do not want to run elevated, disable the power-request check:
+
+```toml
+respect_power_requests = false
+```
+
+With this setting, the service will always force sleep when the idle threshold is
+reached, regardless of any active power requests. This was the only behaviour available
+in v0.1.0.
 
 To see what is currently blocking sleep on your system, run in an elevated terminal:
 
