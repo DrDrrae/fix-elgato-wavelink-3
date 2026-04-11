@@ -23,7 +23,12 @@ impl std::fmt::Display for SuspendState {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum RestartType {
-    Popen,
+    #[serde(rename = "launch_after_sleep")]
+    LaunchAfterSleep,
+    #[serde(rename = "kill_before_sleep")]
+    KillBeforeSleep,
+    #[serde(rename = "restart_after_sleep")]
+    RestartAfterSleep,
 }
 
 /// Verbosity level for the log file. Maps directly to the `log` crate's `LevelFilter`.

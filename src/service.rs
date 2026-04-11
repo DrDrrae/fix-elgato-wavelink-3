@@ -1,4 +1,4 @@
-use crate::config::{Config, SuspendState};
+use crate::config::{Config, RestartType, SuspendState};
 use crate::media::{capture_playback, restart_playback};
 use crate::power::{get_idle_threshold, get_power_status, has_blocking_power_requests, hibernate_enabled, idle_time_secs, suspend_system};
 use std::os::windows::process::CommandExt;
@@ -64,6 +64,30 @@ fn compute_suspend_settings(config: &Config) -> SuspendSettings {
     }
 
     result
+}
+
+fn kill_program(program: &str) {
+    let name = std::path::Path::new(program)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(program);
+    log::info!("Killing process before suspend: {name}");
+    match std::process::Command::new("taskkill")
+        .args(["/F", "/IM", name])
+        .creation_flags(0x08000000)
+        .output()
+    {
+        Ok(output) if output.status.success() => {
+            log::info!("Killed {name}");
+        }
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            log::warn!("taskkill {name} failed ({}): {stderr}", output.status);
+        }
+        Err(e) => {
+            log::warn!("Failed to run taskkill for {name}: {e}");
+        }
+    }
 }
 
 pub fn run_worker(
@@ -177,6 +201,18 @@ pub fn run_worker(
                 Vec::new()
             };
 
+            let mut killed_any = false;
+            for (program, restart_type) in &config.restarts {
+                if *restart_type == RestartType::KillBeforeSleep {
+                    kill_program(program);
+                    killed_any = true;
+                }
+            }
+            if killed_any {
+                log::debug!("Waiting 2s for killed processes to exit before suspending");
+                std::thread::sleep(std::time::Duration::from_secs(2));
+            }
+
             log::info!("Initiating suspend: {:?}", suspend_settings.state);
             match suspend_system(&suspend_settings.state) {
                 Err(e) => {
@@ -200,11 +236,24 @@ pub fn run_worker(
                 });
             }
 
-            for (program, _) in &config.restarts {
-                log::info!("Restarting app on resume: {program}");
-                let _ = std::process::Command::new(program)
-                    .creation_flags(0x08000000)
-                    .spawn();
+            for (program, restart_type) in &config.restarts {
+                match restart_type {
+                    RestartType::LaunchAfterSleep | RestartType::KillBeforeSleep => {
+                        log::info!("Launching app after resume: {program}");
+                        let _ = std::process::Command::new(program)
+                            .creation_flags(0x08000000)
+                            .spawn();
+                    }
+                    RestartType::RestartAfterSleep => {
+                        kill_program(program);
+                        log::debug!("Waiting 2s for killed process to exit before launching: {program}");
+                        std::thread::sleep(std::time::Duration::from_secs(2));
+                        log::info!("Launching app after resume: {program}");
+                        let _ = std::process::Command::new(program)
+                            .creation_flags(0x08000000)
+                            .spawn();
+                    }
+                }
             }
         }
     }

@@ -20,6 +20,13 @@ design, and implementation goes to BuongiornoTexas.
 
 ## Change Log
 
+- **v0.4.0** Extended `[restarts]` table with per-program sleep/wake actions. Three
+  values are now supported: `"launch_after_sleep"` spawns the program after wake
+  (no pre-sleep kill); `"kill_before_sleep"` kills the process before suspending
+  (via `taskkill /F /IM`), waits 2 seconds for it to exit, then launches it after wake;
+  `"restart_after_sleep"` kills the running instance after waking then launches a fresh
+  one, for programs that self-start on resume. All kill and launch actions are logged at
+  `info` level; the post-kill settle delay is logged at `debug` level.
 - **v0.3.2** Bug fixes, robustness improvements, and dependency updates. Bug fixes:
   WinRT COM apartment initialised on media threads so SMTC resume works reliably; COM
   initialisation now uses an RAII guard (`ComInit`) that calls `CoUninitialize` on drop,
@@ -295,40 +302,63 @@ respect_power_requests = false
 
 ---
 
-## App Restart on Resume (`[restarts]`)
+## App Management on Sleep/Wake (`[restarts]`)
 
-The `[restarts]` table lets you automatically relaunch one or more programs every time
-the service wakes from a suspend it triggered. This is useful for apps that crash or
+The `[restarts]` table lets you automatically manage one or more programs on each
+suspend and wake triggered by this service. This is useful for apps that crash or
 break audio routing after sleep (e.g. Elgato Wave Link 3).
 
 **Format:**
 
 ```toml
 [restarts]
-"<executable-or-alias>" = "Popen"
+"<executable-or-alias>" = "<method>"
 ```
 
 Each entry is a key-value pair:
 - **Key** — the program name or path passed to the OS to launch the process.
-- **Value** — the launch method. Currently only `"Popen"` is supported, which spawns
-  the process detached from the service (equivalent to Python's `subprocess.Popen`).
+- **Value** — controls what happens to the process before sleep and after wake:
 
-**Example — restart Elgato Wave Link on resume:**
+| Value | Kill before sleep? | Action after wake |
+|-------|-------------------|-------------------|
+| `"launch_after_sleep"` | No | Launch |
+| `"kill_before_sleep"` | Yes | Launch |
+| `"restart_after_sleep"` | No | Kill, then launch |
+
+`"launch_after_sleep"` spawns the process detached from the service after waking, whether
+or not it was already running. `"kill_before_sleep"` also kills the process by image name
+before suspending (using `taskkill /F /IM`), waits 2 seconds for it to fully exit, then
+launches it after wake. `"restart_after_sleep"` kills the running instance after waking, waits 2 seconds for it
+to fully exit, then launches a fresh one — useful for programs that self-start on resume
+and need their stale instance cleared first.
+
+**Example — kill before sleep, launch after wake:**
 
 ```toml
 [restarts]
-"Elgato.Wavelink.exe" = "Popen"
+"Elgato.Wavelink.exe" = "kill_before_sleep"
 ```
 
-Wave Link registers a Windows app execution alias (`Elgato.Wavelink.exe`), so no full
-UWP path is needed.
+**Example — launch after wake only (no pre-sleep kill):**
+
+```toml
+[restarts]
+"Elgato.Wavelink.exe" = "launch_after_sleep"
+```
+
+**Example — kill after wake only (process self-restarts):**
+
+```toml
+[restarts]
+"Elgato.Wavelink.exe" = "restart_after_sleep"
+```
 
 **Multiple apps:**
 
 ```toml
 [restarts]
-"Elgato.Wavelink.exe" = "Popen"
-"VoicemeeterPro.exe" = "Popen"
+"Elgato.Wavelink.exe" = "launch_after_sleep"
+"VoicemeeterPro.exe" = "launch_after_sleep"
 ```
 
 **Limitations:**
@@ -393,7 +423,7 @@ sleeper_service.exe [--config <CONFIG_PATH>]
 | Tray library | `tray-manager` (pystray wrapper) | `tray-icon` + `muda` |
 | Icon generation | PIL `ImageDraw` + Segoe UI font | Programmatic line drawing (no font dependency) |
 | Config format | Identical `config.toml` — **fully compatible** | Same TOML schema; values are preserved on upgrade |
-| `[restarts]` values | `"Popen"` (string enum) | `"Popen"` (same string) — compatible |
+| `[restarts]` values | `"Popen"` (string enum) | `"launch_after_sleep"`, `"kill_before_sleep"`, `"restart_after_sleep"` |
 | `manual_suspend_after` | `int \| float` | `float` — values like `600` and `600.0` both work |
 | `check_interval` | `int \| float` | `float` — same |
 | SMTC media API | `winrt` Python package | `windows` crate WinRT bindings |
@@ -430,8 +460,8 @@ and is **overwritten on each launch** so it stays clean.
 
 | Level | Examples |
 |-------|---------|
-| `info` | Startup banner (version, config path, log file path), tray menu events (enable/disable, exit), suspend attempts, post-resume app restarts |
-| `debug` | Every check-cycle decision (idle time, threshold, remaining time, why suspend was skipped or triggered), config load/save/clamp, powercfg parsed values, SMTC session list, media pause/play commands, power status (AC/battery), hibernate availability |
+| `info` | Startup banner (version, config path, log file path), tray menu events (enable/disable, exit), suspend attempts, pre-suspend process kills (name + success/failure), post-resume app launches and kills |
+| `debug` | Every check-cycle decision (idle time, threshold, remaining time, why suspend was skipped or triggered), config load/save/clamp, powercfg parsed values, SMTC session list, media pause/play commands, power status (AC/battery), hibernate availability, post-kill settle delay |
 | `trace` | Raw `powercfg /requests` and `powercfg /query` output, raw `powercfg /a` output, individual idle-time API calls |
 
 **Example log output (debug level):**
