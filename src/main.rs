@@ -14,8 +14,8 @@ use std::fs::File;
 use std::path::PathBuf;
 use std::sync::mpsc;
 use std::time::Duration;
-use tray_icon::{Icon, TrayIconBuilder, TrayIconEvent};
-use windows::Win32::Foundation::{ERROR_ALREADY_EXISTS, HWND};
+use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use windows::Win32::Foundation::ERROR_ALREADY_EXISTS;
 use windows::Win32::System::Threading::CreateMutexW;
 use windows::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, MB_ICONERROR, MB_OK, MB_SYSTEMMODAL, MessageBoxW, PeekMessageW,
@@ -123,7 +123,7 @@ fn main() {
         );
         unsafe {
             MessageBoxW(
-                HWND::default(),
+                None,
                 w!("The 'respect_power_requests' setting is enabled, but \
 powercfg /requests requires administrator privileges to run.\r\n\r\n\
 To resolve this, choose one of:\r\n\
@@ -179,6 +179,7 @@ The application will now exit."),
 
     let tray = TrayIconBuilder::new()
         .with_menu(Box::new(menu))
+        .with_menu_on_left_click(false)
         .with_icon(initial_icon)
         .with_tooltip("Sleeper Service")
         .build()
@@ -200,14 +201,37 @@ The application will now exit."),
     loop {
         unsafe {
             let mut msg = MSG::default();
-            while PeekMessageW(&mut msg, HWND(std::ptr::null_mut()), 0, 0, PM_REMOVE).as_bool() {
+            while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
                 let _ = TranslateMessage(&msg);
                 DispatchMessageW(&msg);
             }
         }
 
-        // Drain tray icon events (hover, click, etc.)
-        while TrayIconEvent::receiver().try_recv().is_ok() {}
+        // Handle tray icon left-click: toggle Enabled
+        while let Ok(event) = TrayIconEvent::receiver().try_recv() {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                let new_enabled = !enabled_item.is_checked();
+                enabled_item.set_checked(new_enabled);
+                let new_system = use_system_item.is_checked();
+                let new_resume = resume_item.is_checked();
+                log::info!("Tray icon left-click: toggling enabled={new_enabled}");
+                let _ = worker_tx.send(WorkerMsg::StateChanged {
+                    enabled: new_enabled,
+                    use_system_timer: new_system,
+                    resume_playback: new_resume,
+                });
+                if new_enabled {
+                    let _ = tray.set_icon(Some(enabled_icon.clone()));
+                } else {
+                    let _ = tray.set_icon(Some(disabled_icon.clone()));
+                }
+            }
+        }
 
         // Handle menu events
         while let Ok(event) = MenuEvent::receiver().try_recv() {

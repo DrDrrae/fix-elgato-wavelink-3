@@ -1,7 +1,7 @@
 use crate::config::SuspendState;
 use std::os::windows::process::CommandExt;
 use std::process::Command;
-use windows::Win32::Foundation::{CloseHandle, HANDLE, LUID};
+use windows::Win32::Foundation::{CloseHandle, ERROR_SUCCESS, HANDLE, LUID};
 use windows::Win32::Security::{
     AdjustTokenPrivileges, GetTokenInformation, LookupPrivilegeValueW, LUID_AND_ATTRIBUTES,
     SE_PRIVILEGE_ENABLED, TOKEN_ADJUST_PRIVILEGES, TOKEN_ELEVATION, TOKEN_PRIVILEGES, TOKEN_QUERY,
@@ -13,6 +13,18 @@ use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
 use windows::core::PCWSTR;
 use windows::core::w;
+
+struct HandleGuard(HANDLE);
+
+impl Drop for HandleGuard {
+    fn drop(&mut self) {
+        unsafe {
+            if !self.0.is_invalid() {
+                let _ = CloseHandle(self.0);
+            }
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum PowerStatus {
@@ -241,6 +253,7 @@ pub fn suspend_system(state: &SuspendState) -> windows::core::Result<()> {
         let mut token = HANDLE::default();
         log::debug!("suspend_system: opening process token");
         OpenProcessToken(process, TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &mut token)?;
+        let _token_guard = HandleGuard(token);
 
         let mut luid = LUID::default();
         log::debug!("suspend_system: looking up SeShutdownPrivilege");
@@ -257,16 +270,26 @@ pub fn suspend_system(state: &SuspendState) -> windows::core::Result<()> {
         let mut prev_tp: TOKEN_PRIVILEGES = std::mem::zeroed();
         let mut ret_len = 0u32;
 
-        let _ = AdjustTokenPrivileges(
+        AdjustTokenPrivileges(
             token,
             false,
             Some(&tp as *const TOKEN_PRIVILEGES),
             tp_size,
             Some(&mut prev_tp as *mut TOKEN_PRIVILEGES),
             Some(&mut ret_len),
-        );
+        )?;
+        // AdjustTokenPrivileges returns TRUE even when not all privileges were granted;
+        // ERROR_NOT_ALL_ASSIGNED is set in that case. Treat it as an error.
+        if windows::Win32::Foundation::GetLastError() != ERROR_SUCCESS {
+            log::warn!("suspend_system: AdjustTokenPrivileges did not grant SeShutdownPrivilege");
+            return Err(windows::core::Error::from_thread());
+        }
 
-        SetSuspendState(hibernate, true, false);
+        log::debug!("suspend_system: calling SetSuspendState (hibernate={hibernate})");
+        if !SetSuspendState(hibernate, true, false) {
+            log::warn!("suspend_system: SetSuspendState returned FALSE");
+            return Err(windows::core::Error::from_thread());
+        }
         log::debug!("suspend_system: SetSuspendState called — system will suspend momentarily");
 
         let _ = AdjustTokenPrivileges(
@@ -277,8 +300,6 @@ pub fn suspend_system(state: &SuspendState) -> windows::core::Result<()> {
             None,
             None,
         );
-
-        let _ = CloseHandle(token);
     }
 
     Ok(())

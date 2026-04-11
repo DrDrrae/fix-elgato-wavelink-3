@@ -1,8 +1,48 @@
+use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_MULTITHREADED};
 use windows::Media::Control::{
     GlobalSystemMediaTransportControlsSession,
     GlobalSystemMediaTransportControlsSessionManager,
     GlobalSystemMediaTransportControlsSessionPlaybackStatus,
 };
+
+/// `RPC_E_CHANGED_MODE` (0x80010106) – returned by `CoInitializeEx` when the
+/// thread is already initialised in a different COM apartment model.
+const RPC_E_CHANGED_MODE: windows::core::HRESULT = windows::core::HRESULT(0x80010106_u32 as i32);
+
+/// RAII guard that initialises COM on the current thread and uninitialises it
+/// on drop.  `CoUninitialize` is only called when `CoInitializeEx` succeeded
+/// (i.e. returned `S_OK` or `S_FALSE`).  If the thread is already in a
+/// different apartment (`RPC_E_CHANGED_MODE`) the existing state is left
+/// untouched and a warning is logged.
+struct ComInit {
+    should_uninit: bool,
+}
+
+impl ComInit {
+    fn new() -> Self {
+        let result = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+        let should_uninit = match result {
+            Ok(()) => true,
+            Err(e) => {
+                if e.code() == RPC_E_CHANGED_MODE {
+                    log::warn!("CoInitializeEx: thread already initialised with a different apartment model");
+                } else {
+                    log::warn!("CoInitializeEx failed: {e}");
+                }
+                false
+            }
+        };
+        Self { should_uninit }
+    }
+}
+
+impl Drop for ComInit {
+    fn drop(&mut self) {
+        if self.should_uninit {
+            unsafe { CoUninitialize() };
+        }
+    }
+}
 
 pub struct PlaybackSnapshot {
     pub session: GlobalSystemMediaTransportControlsSession,
@@ -10,10 +50,11 @@ pub struct PlaybackSnapshot {
 }
 
 pub fn capture_playback() -> Vec<PlaybackSnapshot> {
+    let _com = ComInit::new();
     let mut snapshots = Vec::new();
 
     let manager = match GlobalSystemMediaTransportControlsSessionManager::RequestAsync()
-        .and_then(|op| op.get())
+        .and_then(|op| op.join())
     {
         Ok(m) => m,
         Err(e) => {
@@ -57,6 +98,7 @@ pub fn capture_playback() -> Vec<PlaybackSnapshot> {
 }
 
 pub fn restart_playback(snapshots: Vec<PlaybackSnapshot>, delay_secs: u32) {
+    let _com = ComInit::new();
     log::debug!("restart_playback: waiting {delay_secs}s before sending media commands");
     std::thread::sleep(std::time::Duration::from_secs(delay_secs as u64));
 
@@ -67,7 +109,7 @@ pub fn restart_playback(snapshots: Vec<PlaybackSnapshot>, delay_secs: u32) {
         }
         log::debug!("  session[{idx}]: sending Pause");
         if let Ok(op) = snapshot.session.TryPauseAsync() {
-            let _ = op.get();
+            let _ = op.join();
             let mut counter = 0u32;
             loop {
                 let status = snapshot
@@ -88,7 +130,7 @@ pub fn restart_playback(snapshots: Vec<PlaybackSnapshot>, delay_secs: u32) {
         }
         log::debug!("  session[{idx}]: sending Play");
         if let Ok(op) = snapshot.session.TryPlayAsync() {
-            let _ = op.get();
+            let _ = op.join();
         }
     }
     log::debug!("restart_playback: done");

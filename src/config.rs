@@ -145,6 +145,25 @@ impl Config {
             match std::fs::read_to_string(path) {
                 Ok(content) => match toml::from_str::<Config>(&content) {
                     Ok(mut cfg) => {
+                        if !cfg.manual_suspend_after.is_finite() || !cfg.check_interval.is_finite() {
+                            let defaults = Config::default();
+                            if !cfg.manual_suspend_after.is_finite() {
+                                log::warn!(
+                                    "manual_suspend_after is not finite ({}); using default {}",
+                                    cfg.manual_suspend_after,
+                                    defaults.manual_suspend_after
+                                );
+                                cfg.manual_suspend_after = defaults.manual_suspend_after;
+                            }
+                            if !cfg.check_interval.is_finite() {
+                                log::warn!(
+                                    "check_interval is not finite ({}); using default {}",
+                                    cfg.check_interval,
+                                    defaults.check_interval
+                                );
+                                cfg.check_interval = defaults.check_interval;
+                            }
+                        }
                         if cfg.manual_suspend_after < 60.0 {
                             log::debug!(
                                 "Clamping manual_suspend_after {} → 60",
