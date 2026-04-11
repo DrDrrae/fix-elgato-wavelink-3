@@ -21,14 +21,19 @@ design, and implementation goes to BuongiornoTexas.
 ## Change Log
 
 - **v0.3.2** Bug fixes, robustness improvements, and dependency updates. Bug fixes:
-  WinRT COM apartment initialised on media threads so SMTC resume works reliably; token
-  handle now closed on all paths via RAII guard; `AdjustTokenPrivileges` and
-  `SetSuspendState` return values checked and propagated as errors; post-suspend actions
-  (media resume, app restarts) skipped when suspend fails; `NaN`/`inf` config values
-  for `manual_suspend_after` and `check_interval` now fall back to defaults instead of
-  panicking; tray icon left-click now toggles Enabled; tray "After" label shows `0s`
-  instead of `3600s` when suspend is disabled. Dependency updates: `windows` 0.58 →
-  0.62, `tray-icon` 0.14 → 0.22, `muda` 0.13 → 0.17, `toml` 0.8 → 1.x.
+  WinRT COM apartment initialised on media threads so SMTC resume works reliably; COM
+  initialisation now uses an RAII guard (`ComInit`) that calls `CoUninitialize` on drop,
+  checks the `HRESULT`, and handles `RPC_E_CHANGED_MODE` without leaking init reference
+  counts; token handle now closed on all paths via RAII guard; `AdjustTokenPrivileges`
+  and `SetSuspendState` return values checked and propagated as errors; post-suspend
+  actions (media resume, app restarts) skipped when suspend fails; `NaN`/`inf` config
+  values for `manual_suspend_after` and `check_interval` now fall back to
+  `Config::default()` (sourced from the same defaults used by serde) instead of
+  hard-coded literals, preventing silent drift if defaults change; fallback allocation
+  is lazy and only occurs when a non-finite value is actually encountered; tray icon
+  left-click now toggles Enabled; tray "After" label shows `0s` instead of `3600s`
+  when suspend is disabled. Dependency updates: `windows` 0.58 → 0.62, `tray-icon`
+  0.14 → 0.22, `muda` 0.13 → 0.17, `toml` 0.8 → 1.x.
 - **v0.3.1** Admin elevation guard: if `respect_power_requests = true` and the process
   is not running as administrator, the app now shows an error dialog explaining the
   requirement and exits cleanly instead of silently failing.
