@@ -6,6 +6,10 @@ use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::Duration;
 
+/// Settle delay (seconds) after killing processes — applied both before suspend and on post-resume
+/// kill-then-launch sequences — to allow the OS to fully clean up before the next action.
+const KILL_SETTLE_SECS: u64 = 2;
+
 pub enum WorkerMsg {
     StateChanged {
         enabled: bool,
@@ -209,8 +213,32 @@ pub fn run_worker(
                 }
             }
             if killed_any {
-                log::debug!("Waiting 2s for killed processes to exit before suspending");
-                std::thread::sleep(std::time::Duration::from_secs(2));
+                log::debug!(
+                    "Waiting {}s for killed processes to exit before suspending",
+                    KILL_SETTLE_SECS
+                );
+                std::thread::sleep(Duration::from_secs(KILL_SETTLE_SECS));
+
+                // Re-check conditions: user activity or a new power request during the settle
+                // window should cancel the pending suspend.
+                let idle_after_settle = idle_time_secs();
+                let suspend_after = suspend_settings.after_secs as f64;
+                if idle_after_settle < suspend_after {
+                    log::info!(
+                        "Suspend cancelled after settle delay: idle time dropped to {:.1}s (threshold {}s)",
+                        idle_after_settle,
+                        suspend_settings.after_secs
+                    );
+                    continue;
+                }
+                if config.respect_power_requests
+                    && has_blocking_power_requests(&config.ignored_power_requests)
+                {
+                    log::info!(
+                        "Suspend cancelled after settle delay: blocking power request detected"
+                    );
+                    continue;
+                }
             }
 
             log::info!("Initiating suspend: {:?}", suspend_settings.state);
@@ -246,8 +274,11 @@ pub fn run_worker(
                     }
                     RestartType::RestartAfterSleep => {
                         kill_program(program);
-                        log::debug!("Waiting 2s for killed process to exit before launching: {program}");
-                        std::thread::sleep(std::time::Duration::from_secs(2));
+                        log::debug!(
+                            "Waiting {}s for killed process to exit before launching: {program}",
+                            KILL_SETTLE_SECS
+                        );
+                        std::thread::sleep(Duration::from_secs(KILL_SETTLE_SECS));
                         log::info!("Launching app after resume: {program}");
                         let _ = std::process::Command::new(program)
                             .creation_flags(0x08000000)

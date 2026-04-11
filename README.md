@@ -346,7 +346,7 @@ and need their stale instance cleared first.
 "Elgato.Wavelink.exe" = "launch_after_sleep"
 ```
 
-**Example — kill after wake only (process self-restarts):**
+**Example — kill then launch after wake (full process restart):**
 
 ```toml
 [restarts]
