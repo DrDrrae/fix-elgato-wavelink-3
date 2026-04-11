@@ -1,3 +1,4 @@
+use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
 use windows::Media::Control::{
     GlobalSystemMediaTransportControlsSession,
     GlobalSystemMediaTransportControlsSessionManager,
@@ -10,10 +11,13 @@ pub struct PlaybackSnapshot {
 }
 
 pub fn capture_playback() -> Vec<PlaybackSnapshot> {
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+    }
     let mut snapshots = Vec::new();
 
     let manager = match GlobalSystemMediaTransportControlsSessionManager::RequestAsync()
-        .and_then(|op| op.get())
+        .and_then(|op| op.join())
     {
         Ok(m) => m,
         Err(e) => {
@@ -57,6 +61,9 @@ pub fn capture_playback() -> Vec<PlaybackSnapshot> {
 }
 
 pub fn restart_playback(snapshots: Vec<PlaybackSnapshot>, delay_secs: u32) {
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+    }
     log::debug!("restart_playback: waiting {delay_secs}s before sending media commands");
     std::thread::sleep(std::time::Duration::from_secs(delay_secs as u64));
 
@@ -67,7 +74,7 @@ pub fn restart_playback(snapshots: Vec<PlaybackSnapshot>, delay_secs: u32) {
         }
         log::debug!("  session[{idx}]: sending Pause");
         if let Ok(op) = snapshot.session.TryPauseAsync() {
-            let _ = op.get();
+            let _ = op.join();
             let mut counter = 0u32;
             loop {
                 let status = snapshot
@@ -88,7 +95,7 @@ pub fn restart_playback(snapshots: Vec<PlaybackSnapshot>, delay_secs: u32) {
         }
         log::debug!("  session[{idx}]: sending Play");
         if let Ok(op) = snapshot.session.TryPlayAsync() {
-            let _ = op.get();
+            let _ = op.join();
         }
     }
     log::debug!("restart_playback: done");

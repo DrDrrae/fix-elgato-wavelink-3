@@ -20,6 +20,15 @@ design, and implementation goes to BuongiornoTexas.
 
 ## Change Log
 
+- **v0.3.2** Bug fixes, robustness improvements, and dependency updates. Bug fixes:
+  WinRT COM apartment initialised on media threads so SMTC resume works reliably; token
+  handle now closed on all paths via RAII guard; `AdjustTokenPrivileges` and
+  `SetSuspendState` return values checked and propagated as errors; post-suspend actions
+  (media resume, app restarts) skipped when suspend fails; `NaN`/`inf` config values
+  for `manual_suspend_after` and `check_interval` now fall back to defaults instead of
+  panicking; tray icon left-click now toggles Enabled; tray "After" label shows `0s`
+  instead of `3600s` when suspend is disabled. Dependency updates: `windows` 0.58 →
+  0.62, `tray-icon` 0.14 → 0.22, `muda` 0.13 → 0.17, `toml` 0.8 → 1.x.
 - **v0.3.1** Admin elevation guard: if `respect_power_requests = true` and the process
   is not running as administrator, the app now shows an error dialog explaining the
   requirement and exits cleanly instead of silently failing.
@@ -99,17 +108,19 @@ The binary is a Windows GUI application (no console window).
 **Tray icon:**
 - **ZZZ icon** — service is enabled and monitoring idle time.
 - **ZZZ with red X** — service is disabled (will not force suspend).
+- **Left-click** — toggles the service on/off (same as the **Enabled** menu item).
+- **Right-click** — opens the context menu.
 
 **Right-click menu:**
 
 | Item | Description |
 |------|-------------|
-| **Enabled** ✓ | Toggle the service on/off. Left-click the icon also toggles this. |
+| **Enabled** ✓ | Toggle the service on/off. |
 | **Use System Timers** ✓ | When checked, reads sleep/hibernate thresholds from your active Windows power plan. When unchecked, uses `manual_suspend_after` and `manual_suspend_state` from the config file. |
 | `Suspend: sleep` | Read-only label showing the active suspend mode. |
 | `After: 600s` | Read-only label showing the active idle threshold in seconds. |
 | **Resume playback** ✓ | When checked, attempts to resume SMTC-compatible media players after waking. |
-| **Suspend now(-ish)!** | *(Optional)* Forces a suspend at the end of the current check interval. Only visible when `suspend_button = true` in the config. |
+| **Suspend now(-ish)!** | *(Optional)* Forces a suspend immediately when selected. Only visible when `suspend_button = true` in the config. |
 | **Exit** | Exits the service and saves current settings. |
 
 ---

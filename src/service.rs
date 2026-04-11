@@ -31,7 +31,7 @@ impl Default for SuspendSettings {
     fn default() -> Self {
         Self {
             state: SuspendState::Disabled,
-            after_secs: 3600,
+            after_secs: 0,
         }
     }
 }
@@ -46,7 +46,6 @@ fn compute_suspend_settings(config: &Config) -> SuspendSettings {
 
     let power_state = get_power_status();
     let mut result = SuspendSettings::default();
-    result.after_secs = 60 * 60;
 
     let sleep_thresh = get_idle_threshold(&power_state, &SuspendState::Sleep);
     if sleep_thresh > 0 {
@@ -179,10 +178,14 @@ pub fn run_worker(
             };
 
             log::info!("Initiating suspend: {:?}", suspend_settings.state);
-            if let Err(e) = suspend_system(&suspend_settings.state) {
-                log::warn!("Suspend failed: {e}");
-            } else {
-                log::info!("Resumed from suspend");
+            match suspend_system(&suspend_settings.state) {
+                Err(e) => {
+                    log::warn!("Suspend failed: {e}");
+                    continue;
+                }
+                Ok(()) => {
+                    log::info!("Resumed from suspend");
+                }
             }
 
             if resume_playback && !snapshots.is_empty() {
