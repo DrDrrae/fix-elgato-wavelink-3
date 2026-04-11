@@ -71,7 +71,7 @@ fn kill_program(program: &str) {
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or(program);
-    log::info!("Killing process before suspend: {name}");
+    log::info!("Killing process: {name}");
     match std::process::Command::new("taskkill")
         .args(["/F", "/IM", name])
         .creation_flags(0x08000000)
