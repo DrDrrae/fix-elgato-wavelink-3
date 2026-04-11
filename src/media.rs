@@ -21,7 +21,7 @@ struct ComInit {
 impl ComInit {
     fn new() -> Self {
         let result = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
-        let should_uninit = match result {
+        let should_uninit = match result.ok() {
             Ok(()) => true,
             Err(e) => {
                 if e.code() == RPC_E_CHANGED_MODE {
